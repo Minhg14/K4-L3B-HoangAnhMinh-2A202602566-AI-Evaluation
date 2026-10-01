@@ -250,17 +250,40 @@ class OpenAIGenerator:
             raise RuntimeError("OPENAI_API_KEY is missing from .env")
         if not self.model:
             raise RuntimeError("OPENAI_MODEL is missing from .env")
-        self.client = OpenAI(api_key=api_key)
+        base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
+        if not base_url and api_key.startswith("sk-or-"):
+            base_url = "https://openrouter.ai/api/v1"
+        self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.max_output_tokens = max_output_tokens
 
     def generate(self, prompt: str) -> str:
-        response = self.client.responses.create(
-            model=self.model,
-            input=prompt,
+        base_url_str = str(getattr(self.client, "base_url", ""))
+        is_openrouter = "openrouter" in base_url_str
+        model = self.model
+        if is_openrouter and not ("/" in model):
+            model = f"openai/{model}"
+
+        if not is_openrouter and hasattr(self.client, "responses"):
+            try:
+                response = self.client.responses.create(
+                    model=model,
+                    input=prompt,
+                    temperature=0,
+                    max_output_tokens=self.max_output_tokens,
+                )
+                answer = response.output_text.strip()
+                if answer:
+                    return answer
+            except Exception:
+                pass
+
+        response = self.client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
             temperature=0,
-            max_output_tokens=self.max_output_tokens,
+            max_tokens=self.max_output_tokens,
         )
-        answer = response.output_text.strip()
+        answer = (response.choices[0].message.content or "").strip()
         if not answer:
             raise RuntimeError("OpenAI returned an empty answer")
         return answer
